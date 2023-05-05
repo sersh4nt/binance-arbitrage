@@ -1,14 +1,16 @@
 import asyncio
+import sys
 from collections import defaultdict
 from decimal import Decimal
+from itertools import permutations
 
 import httpx
 
 from p2p import get_p2p_orderbook
 
 SYMBOLS = ["USDT", "BTC", "BUSD", "BNB", "ETH", "RUB"]
-PAYMENTS = ["TinkoffNew", "RosBankNew"] #, "QIWI", "YandexMoneyNew"]
-INITIAL_AMOUNT = Decimal(2000)
+PAYMENTS = ["TinkoffNew", "RosBankNew", "QIWI", "YandexMoneyNew"]
+INITIAL_AMOUNT = Decimal(4000)
 
 
 async def get_orderbook(symbol: str, limit: int = 50):
@@ -19,7 +21,7 @@ async def get_orderbook(symbol: str, limit: int = 50):
         )
 
 
-async def get_convert_rate() -> dict:
+async def get_convert_rate() -> dict[tuple[str, str], int]:
     symbols = [
         "BTC/USDT",
         "BUSD/USDT",
@@ -39,15 +41,13 @@ async def get_convert_rate() -> dict:
     ]
     tasks = [get_orderbook(s.replace("/", ""), 1) for s in symbols]
     r = await asyncio.gather(*tasks)
-    result = defaultdict(dict)
+    result = {(s, s): Decimal(1) for s in SYMBOLS}
     for i, rate in enumerate(r):
         c1, c2 = symbols[i].split("/")
         rate = rate.json()
-        rate = (Decimal(rate["bids"][0][0]) + Decimal(rate["asks"][0][0])) / 2
-        result[c1][c2] = rate
-        result[c2][c1] = Decimal(1) / rate
-    for s in SYMBOLS:
-        result[s][s] = Decimal(1)
+        rate = Decimal(rate["bids"][0][0])
+        result[(c1, c2)] = rate
+        result[(c2, c1)] = Decimal(1) / rate
     return result
 
 
@@ -61,32 +61,49 @@ async def get_p2p_rate() -> dict:
         for p in PAYMENTS
     ]
     r = await asyncio.gather(*tasks)
-    result = defaultdict(lambda: defaultdict(dict))
+    result = defaultdict(dict)
     for i, orderbook in enumerate(r):
         direction = directions[i // (len(PAYMENTS) * len(SYMBOLS))]
         symbol = SYMBOLS[(i // len(PAYMENTS)) % len(SYMBOLS)]
         payment = PAYMENTS[i % len(PAYMENTS)]
         orderbook = orderbook.json()["data"][0]
-        result[direction][symbol][payment] = Decimal(orderbook["adv"]["price"])
+        result[direction][(symbol, payment)] = Decimal(orderbook["adv"]["price"])
     return result
 
 
-async def main():
+async def main(d: int = 1):
     convert_rate, p2p_rate = await asyncio.gather(get_convert_rate(), get_p2p_rate())
+    cnt = d + 1
+    results = []
 
-    for symbol_from in SYMBOLS:
-        for symbol_to in SYMBOLS:
+    for depth in range(2, cnt + 1):
+        for syms in permutations(SYMBOLS, r=depth):
             for payment_from in PAYMENTS:
                 for payment_to in PAYMENTS:
-                    # usdt -> btc
-                    bought = INITIAL_AMOUNT / p2p_rate["BUY"][symbol_from][payment_from]
-                    converted = bought * convert_rate[symbol_from][symbol_to]
-                    sold = converted * p2p_rate["BUY"][symbol_to][payment_to]
-                    if sold / INITIAL_AMOUNT > Decimal(1.01):
-                        print(
-                            f"{symbol_from}->{symbol_to}: {payment_from}->{payment_to} = {sold:.2f} ({sold / INITIAL_AMOUNT * 100 - 100:.2f}%)"
+                    result = INITIAL_AMOUNT / p2p_rate["BUY"][(syms[0], payment_from)]
+                    for i in range(1, depth):
+                        result *= convert_rate[(syms[i - 1], syms[i])]
+                    result *= p2p_rate["BUY"][(syms[-1], payment_to)]
+
+                    results.append(
+                        (
+                            syms,
+                            payment_from,
+                            payment_to,
+                            result,
+                            result / INITIAL_AMOUNT * 100 - 100,
                         )
+                    )
+
+    results = sorted(results, key=lambda x: x[4])
+
+    for res in results:
+        print(f"{'->'.join(res[0])}: {res[1]}->{res[2]} = {res[3]:.2f} ({res[4]:.2f}%)")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        depth = int(sys.argv[1])
+    except IndexError:
+        depth = 1
+    asyncio.run(main(depth))
