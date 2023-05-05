@@ -9,7 +9,7 @@ import httpx
 from p2p import get_p2p_orderbook
 
 SYMBOLS = ["USDT", "BTC", "BUSD", "BNB", "ETH", "RUB"]
-PAYMENTS = ["TinkoffNew", "RosBankNew", "QIWI", "YandexMoneyNew"]
+PAYMENTS = ["TinkoffNew", "RosBankNew"] #, "QIWI", "YandexMoneyNew"]
 INITIAL_AMOUNT = Decimal(4000)
 
 
@@ -105,5 +105,5 @@ if __name__ == "__main__":
     try:
         depth = int(sys.argv[1])
     except IndexError:
-        depth = 1
+        depth = 2
     asyncio.run(main(depth))
